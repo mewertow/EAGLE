@@ -1,15 +1,19 @@
-#usage "<b>Create a list of all signals with various data</b>\n"
+#usage "<b>This ULP creates a list of all signals with various data</b>\n"
        "<p>"
        "Creates a list of all signals of a board, together "
        "with their maximum frequency, length, area, resistance, "
        "minimum and maximum width and maximum current."
        "<p>"
-       "This is a very simplified calculation for a first evaluation "
-       "of the layout."
+       "This calculation is very simple - it uses minimum Width "
+       "in a signal for calculating the resistance. Take note "
+       "that the values, then, of R [mOhm] and Imax [A] may not "
+       "be representative of the actual value if there are multiple "
+       "widths in the signal. "
+
        "<p>"
        "Parallel tracks and polygons are not taken into consideration."
        "<p>"
-       "<author>Author: support@cadsoft.de</author>"
+       "<author>Author: support@voltera.io</author>"
 
 // THIS PROGRAM IS PROVIDED AS IS AND WITHOUT WARRANTY OF ANY KIND, EXPRESSED OR IMPLIED
 
@@ -29,12 +33,19 @@
  "A. Zaffran 05.04.2000 alf@cadsoft.de<p>"
 */
 
+// --------------------------------------- CONSTANTS
+
+string Help = usage;
+string HButton = "&Help";
+string SButton = "&Save";
+
 real f, WLtotal;
 int index[];
 
     // ** aus "Mechanik der Elektronik"
     // mm  <1  1  2  3  4  5  6  7  8  9 10 11 12 13 mm Leiterbreite bei 35 um Cu
 
+// Leave this in for now, but make a new method for ink.
 real k[] = { 9, 8.8, 6, 4, 3.2, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9 };
 
     //               _______________________
@@ -46,7 +57,7 @@ real k[] = { 9, 8.8, 6, 4, 3.2, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9
     //  ** aus "Mechanik der Elektronik"
 
 real Cu = 0.035;  // 35 um Cu Kaschierung
-real Ink = 0.085; // 85 um standard ink thickness
+real Ink = 0.100; // 85 um standard ink thickness
 
 
 real Length[], Freq[], Widthmin[], Widthmax[];
@@ -61,15 +72,25 @@ string h;
 string header;
 int note = 0;
 
+// --------------------------------------- METHODS
+
+void help(void) {
+  dlgMessageBox(Help, "Ok");
+  return;
+}
+
 void dialog(void)
 {
   int select = 0;
-  int Result = dlgDialog("Wire length of Layout") {
+  int Result = dlgDialog("Signal Wire Parameters in Board") {
     dlgLabel(header);
     string lab;
-    sprintf(lab, " Ink thickness = %.3f mm", Ink);
+    sprintf(lab, " Ink thickness = %.3f mm, Copper thickness - %.3f mm", Ink, Cu);
     dlgLabel(lab);
     dlgListView("", data, select);
+    // dlgHBoxLayout {
+    //     dlgLabel
+    // }
     dlgStretch(0);
     dlgHBoxLayout {
       dlgStretch(1);
@@ -119,12 +140,19 @@ void WireWidth(string sig, real w)
   if (w > Widthmax[n])  Widthmax[n] = w;
 }
 
+// Adjust this to be imax Copper. Then, add imax Ink.
 real imax(real width)
 {
   return (width == 0) ? 0 : 5.25 * sqrt((Ink * width * (Ink + width)) * k[int(trunc(width))]);
 }
 
+
+// --------------------------------------- EXECUTION SCRIPT
+
 if (board) board(B) {
+    help();
+
+
    sprintf(h, "%s\n", EAGLE_SIGNATURE);
    header += h;
    sprintf(h, "List of signals with length and its max. frequency / current\n");
@@ -156,20 +184,36 @@ if (board) board(B) {
      }
    sort(n, index, Freq);
 
-   sprintf(h, "Signal\tf max. [MHz]\tl [mm]\tA [mm2]\tR [mOhm]\tw min [mm]\tw max [mm]\tImax [A]");
+   // "A" here is misleading - it's the cross-sectional area, not total area.
+   sprintf(h, "Signal\tf max. [MHz]\tl [mm]\tA [mm2]\tR copper [mOhm]\tR ink [Ohm]\tw min [mm]\tw max [mm]\tImax [A]");
    data[0] = h;
    t = 1;
 
    for (int i = 0; i < n; ++i) {
-       real mm2 = Widthmin[index[i]] * Cu;
-       real mOhm = 0;
-       string R;
+       real mm2_copper = Widthmin[index[i]] * Cu;
+       real mOhm_copper = 0;
+       string R_copper;
+
+       real mm2_ink = Widthmin[index[i]] * Ink;
+       real Ohm_ink = 0;
+       string R_ink;
+
+       // Calculates resistance. These constant names are rough times.
        if (Widthmin[index[i]]) {
-          mOhm  = (174 * Length[index[i]] / 10) / ( Cu * 1000 * Widthmin[index[i]]);
-          sprintf(R, "%7.2f", mOhm);
+          // The constants used in this calculation are a bit opaque, but digging shows that it just uses R = pL/A, where p is 174/(10*1000). The value 174 is the resistivity of annealed copper at room temperature (~23C), given the temperature coefficient of annealed copper. See http://hyperphysics.phy-astr.gsu.edu/hbase/Tables/rstiv.html
+
+          //Copper, constant is in mOhm.mm
+          mOhm_copper  = (0.0174 * Length[index[i]]) / ( Cu * Widthmin[index[i]]);
+
+          sprintf(R_copper, "%7.2f", mOhm_copper);
+
+          // Here, we just use sheet resistance of ink (12 mOhm/sq)
+          Ohm_ink  = (12 * Length[index[i]]) / (Widthmin[index[i]]) / 1000;
+
+          sprintf(R_ink, "%7.2f", Ohm_ink);
           }
 
-       sprintf(h, "%s\t%10.2f\t%7.3f\t%4.3f\t%s\t%6.3f\t%6.3f\t%6.2f", Signal[index[i]], Freq[index[i]], Length[index[i]], mm2, R, Widthmin[index[i]], Widthmax[index[i]], imax(Widthmin[index[i]]));
+       sprintf(h, "%s\t%10.2f\t%7.3f\t%4.3f\t%s\t%s\t%6.3f\t%6.3f\t%6.2f", Signal[index[i]], Freq[index[i]], Length[index[i]], mm2_ink, R_copper, R_ink, Widthmin[index[i]], Widthmax[index[i]], imax(Widthmin[index[i]]));
        data[t] = h;
 
        if (!Widthmin[index[i]]) {
