@@ -1,14 +1,12 @@
-#usage "<b>This ULP creates a list of all signals with various data</b>\n"
+#usage "<b>Resistance and Peak Current Calculator for Conductive Ink</b>\n"
        "<p>"
-       "Creates a list of all signals of a board, together "
-       "with their maximum frequency, length, area, resistance, "
-       "minimum and maximum width and maximum current."
+       "This Creates a list of all signals of a board, together "
+       "with their length, area, resistance, minimum and maximum "
+       "width and maximum current."
        "<p>"
-       "This calculation is very simple - it uses minimum Width "
-       "in a signal for calculating the resistance. Take note "
-       "that the values, then, of R [mOhm] and Imax [A] may not "
-       "be representative of the actual value if there are multiple "
-       "widths in the signal. "
+       "Unlike length-freq-ri.ulp, this calculation leaves out "
+       "frequency, but calculates resistance correctly using all "
+       "traces in the signal."
 
        "<p>"
        "Parallel tracks and polygons are not taken into consideration."
@@ -17,29 +15,13 @@
 
 // THIS PROGRAM IS PROVIDED AS IS AND WITHOUT WARRANTY OF ANY KIND, EXPRESSED OR IMPLIED
 
-/*  German description:
- "Dieses ULP berechnet alle Signallaengen eines Layouts<p>"
- "(nur Layer 1 bis 16) und die zugehoerige Frequenz (f=c/l) "
- "und erzeugt eine Textdatei length-ri.txt, die alle Signale nach "
- "Frequenz bzw Laenge sortiert enthaelt.<p>"
- "Bei der Frequenzberechnung handelt es sich um eine ganz einfache "
- "Umrechnung, die eine erste Abschaetzung bzgl. Stoerstrahlung erlaubt.<p>"
- "Zusaetzlich wird die minimale und maximale Leiterbahnbreite ermittelt "
- "und die daraus resultierende Strombelastung.<p>"
- "Bei der Widerstands- und Strombelastbarkeits-Berechnung wird die "
- "minimale Leiterbahnbreite herangezogen.<p>"
- "Es wird auch keine eine Parallelführung bzw. Fläche (Polygon) "
- "berücksichtigt.<p>"
- "A. Zaffran 05.04.2000 alf@cadsoft.de<p>"
-*/
-
 // --------------------------------------- CONSTANTS
 
 string Help = usage;
 string HButton = "&Help";
 string SButton = "&Save";
 
-real f, WLtotal;
+real f, wire_length_total, res_total_ink, res_total_cu;
 int index[];
 
     // ** aus "Mechanik der Elektronik"
@@ -56,14 +38,15 @@ real k[] = { 9, 8.8, 6, 4, 3.2, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9, 2.9
     //  k = Korrekturwert aus Tabelle      02.02.2000 alf
     //  ** aus "Mechanik der Elektronik"
 
-real Cu = 0.035;  // 35 um Cu Kaschierung
-real Ink = 0.100; // 85 um standard ink thickness
+real Cu = 0.035;  // 35 um cu thickness 1oz
+real Ink = 0.085; // 85 um standard ink thickness
 
 
-real Length[], Freq[], Widthmin[], Widthmax[];
-string Signal[];
+real wire_length[], width_min[], width_max[], resistance_ink[], resistance_copper[];
 
-real c = 299800;   // Lichtgechwindigkeit Vakuum in [km/s]
+string signal[];
+
+real c = 299800;   // Speed of light in vacuum [km/s] - for frequency calcualtion, which is currently not possible
 
 int n = 0;
 int t;
@@ -82,10 +65,10 @@ void help(void) {
 void dialog(void)
 {
   int select = 0;
-  int Result = dlgDialog("Signal Wire Parameters in Board") {
+  int Result = dlgDialog("Resistance and Peak Current Calculator for Conductive Ink") {
     dlgLabel(header);
     string lab;
-    sprintf(lab, " Ink thickness = %.3f mm, Copper thickness - %.3f mm", Ink, Cu);
+    sprintf(lab, " Ink thickness = %.3f mm \n Ink tRef = 80C", Ink);
     dlgLabel(lab);
     dlgListView("", data, select);
     // dlgHBoxLayout {
@@ -136,14 +119,36 @@ real Frequency(real c, real l)
 void WireWidth(string sig, real w)
 {
   // ermitteln der min-max Leiterbahnbreite
-  if (w < Widthmin[n])  Widthmin[n] = w;
-  if (w > Widthmax[n])  Widthmax[n] = w;
+  if (w < width_min[n])  width_min[n] = w;
+  if (w > width_max[n])  width_max[n] = w;
 }
 
 // Adjust this to be imax Copper. Then, add imax Ink.
-real imax(real width)
+real IMaxCopper(real width)
 {
   return (width == 0) ? 0 : 5.25 * sqrt((Ink * width * (Ink + width)) * k[int(trunc(width))]);
+}
+
+// For ink, use what we calculated before, using tref = 80C.
+real IMaxInk(real width)
+{
+  // The equation is complicated, but that's what we get. Tref is 80C.
+  return (width == 0) ? 0 : sqrt(55/(2799.7*pow((width*1000/25.4),(-1.139))));
+}
+
+// Calculate resistance given a length, width, and material type.
+real CalcResistance(string material, real length, real width) {
+    real r = 1;
+
+    if (material == "copper") {
+        r = (0.0174 * length / (Cu * width));
+    }
+    else {
+        if (material == "ink") {
+            r = (0.96 * length / (Ink * width)) / 1000;
+        }
+    }
+    return r;
 }
 
 
@@ -155,68 +160,71 @@ if (board) board(B) {
 
    sprintf(h, "%s\n", EAGLE_SIGNATURE);
    header += h;
-   sprintf(h, "List of signals with length and its max. frequency / current\n");
+   sprintf(h, "List of signals with length and its resistance and max. current\n");
    header += h;
    sprintf(h, "exported from %s\nat %s\n", B.name, t2string(time()));
    header += h;
 
+
    B.signals(S) {
-     WLtotal = 0;
-     Widthmin[n] = 32000;
-     Widthmax[n] = 0;
+     real length = 0;
+
+     wire_length_total = 0;
+     res_total_cu = 0;
+     res_total_ink = 0;
+
+     width_min[n] = 32000; // I believe this is the maximum possible width
+     width_max[n] = 0;
+
      S.wires(W) {
        if (W.layer < 17) {           // nur Kupfer-Layer
           if (W.arc) {
-             WLtotal += ArcLength(W.arc.angle1, W.arc.angle2, u2mm(W.arc.radius));
+             length = ArcLength(W.arc.angle1, W.arc.angle2, u2mm(W.arc.radius));
              }
+
           else {
-             WLtotal += WireLength(u2mm(W.x2), u2mm(W.x1), u2mm(W.y2), u2mm(W.y1));
+             length = WireLength(u2mm(W.x2), u2mm(W.x1), u2mm(W.y2), u2mm(W.y1));
              }
+
+          wire_length_total += length;
+          res_total_cu += CalcResistance("copper", length, u2mm(W.width));
+          res_total_ink += CalcResistance("ink", length, u2mm(W.width));
+
           WireWidth(S.name, u2mm(W.width));
           }
        }
-     if (WLtotal != 0) {
-        Signal[n] = S.name;
-        Length[n] = WLtotal;
-        Freq[n] = Frequency(c, WLtotal);
+     if (wire_length_total != 0) {
+        signal[n] = S.name;
+        wire_length[n] = wire_length_total;
+        resistance_copper[n] = res_total_cu;
+        resistance_ink[n] = res_total_ink;
         ++n;
         }
      }
-   sort(n, index, Freq);
+   sort(n, index, wire_length);
 
    // "A" here is misleading - it's the cross-sectional area, not total area.
-   sprintf(h, "Signal\tf max. [MHz]\tl [mm]\tA [mm2]\tR copper [mOhm]\tR ink [Ohm]\tw min [mm]\tw max [mm]\tImax [A]");
+   sprintf(h, "Signal\tLength [mm]\tR ink [Ohm]\tw min [mm]\tw max [mm]\tImax_ink [A]");
    data[0] = h;
    t = 1;
 
    for (int i = 0; i < n; ++i) {
-       real mm2_copper = Widthmin[index[i]] * Cu;
-       real mOhm_copper = 0;
        string R_copper;
-
-       real mm2_ink = Widthmin[index[i]] * Ink;
-       real Ohm_ink = 0;
        string R_ink;
 
        // Calculates resistance. These constant names are rough times.
-       if (Widthmin[index[i]]) {
+       if (width_min[index[i]]) {
           // The constants used in this calculation are a bit opaque, but digging shows that it just uses R = pL/A, where p is 174/(10*1000). The value 174 is the resistivity of annealed copper at room temperature (~23C), given the temperature coefficient of annealed copper. See http://hyperphysics.phy-astr.gsu.edu/hbase/Tables/rstiv.html
 
-          //Copper, constant is in mOhm.mm
-          mOhm_copper  = (0.0174 * Length[index[i]]) / ( Cu * Widthmin[index[i]]);
+          sprintf(R_copper, "%7.2f", resistance_copper[i]);
 
-          sprintf(R_copper, "%7.2f", mOhm_copper);
-
-          // Here, we just use sheet resistance of ink (12 mOhm/sq)
-          Ohm_ink  = (12 * Length[index[i]]) / (Widthmin[index[i]]) / 1000;
-
-          sprintf(R_ink, "%7.2f", Ohm_ink);
+          sprintf(R_ink, "%7.2f", resistance_ink[i]);
           }
 
-       sprintf(h, "%s\t%10.2f\t%7.3f\t%4.3f\t%s\t%s\t%6.3f\t%6.3f\t%6.2f", Signal[index[i]], Freq[index[i]], Length[index[i]], mm2_ink, R_copper, R_ink, Widthmin[index[i]], Widthmax[index[i]], imax(Widthmin[index[i]]));
+       sprintf(h, "%s\t%7.3f\t%s\t%6.3f\t%6.3f\t%6.2f", signal[index[i]], wire_length[index[i]], R_ink, width_min[index[i]], width_max[index[i]], IMaxInk(width_min[index[i]]));
        data[t] = h;
 
-       if (!Widthmin[index[i]]) {
+       if (!width_min[index[i]]) {
           note = 1;
           sprintf( h, " ***");
           data[t] += h;
