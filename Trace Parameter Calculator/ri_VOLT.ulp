@@ -168,7 +168,6 @@ if (board) board(B) {
 
    B.signals(S) {
      real length = 0;
-
      wire_length_total = 0;
      res_total_cu = 0;
      res_total_ink = 0;
@@ -216,9 +215,9 @@ if (board) board(B) {
        if (width_min[index[i]]) {
           // The constants used in this calculation are a bit opaque, but digging shows that it just uses R = pL/A, where p is 174/(10*1000). The value 174 is the resistivity of annealed copper at room temperature (~23C), given the temperature coefficient of annealed copper. See http://hyperphysics.phy-astr.gsu.edu/hbase/Tables/rstiv.html
 
-          sprintf(R_copper, "%7.2f", resistance_copper[i]);
+          sprintf(R_copper, "%7.2f", resistance_copper[index[i]]);
 
-          sprintf(R_ink, "%7.2f", resistance_ink[i]);
+          sprintf(R_ink, "%7.2f", resistance_ink[index[i]]);
           }
 
        sprintf(h, "%s\t%7.3f\t%s\t%6.3f\t%6.3f\t%6.2f", signal[index[i]], wire_length[index[i]], R_ink, width_min[index[i]], width_max[index[i]], IMaxInk(width_min[index[i]]));
